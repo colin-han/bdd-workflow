@@ -88,7 +88,7 @@ print_file_tree() {
         all_files+=("$rel_path")
         local target_file="$CLAUDE_DIR/$rel_path"
         
-        if [ -f "$target_file" ]; then
+        if [ -f "$target_file" ] && ! files_are_identical "$file" "$target_file"; then
             echo "$rel_path" >> "$conflicts_temp_file"
         fi
     done < <(collect_files)
@@ -119,15 +119,20 @@ print_file_tree() {
         fi
         
         # 显示文件
+        local target_file="$CLAUDE_DIR/$file"
         if [[ "$dir_path" != "." ]]; then
             if [[ "$is_conflict" -eq 1 ]]; then
-                echo -e "│   ├── ${RED}$file_name${NC} ${YELLOW}(冲突)${NC}"
+                echo -e "│   ├── ${RED}$file_name${NC} ${YELLOW}(将被更新)${NC}"
+            elif [[ ! -f "$target_file" ]]; then
+                echo -e "│   ├── ${GREEN}$file_name${NC} ${BLUE}(新文件)${NC}"
             else
                 echo -e "│   ├── ${GREEN}$file_name${NC}"
             fi
         else
             if [[ "$is_conflict" -eq 1 ]]; then
-                echo -e "├── ${RED}$file_name${NC} ${YELLOW}(冲突)${NC}"
+                echo -e "├── ${RED}$file_name${NC} ${YELLOW}(将被更新)${NC}"
+            elif [[ ! -f "$target_file" ]]; then
+                echo -e "├── ${GREEN}$file_name${NC} ${BLUE}(新文件)${NC}"
             else
                 echo -e "├── ${GREEN}$file_name${NC}"
             fi
@@ -139,6 +144,19 @@ print_file_tree() {
     rm -f "$conflicts_temp_file"
 }
 
+# 检查两个文件是否相同
+files_are_identical() {
+    local file1="$1"
+    local file2="$2"
+    
+    if [ ! -f "$file1" ] || [ ! -f "$file2" ]; then
+        return 1
+    fi
+    
+    # 使用diff检查文件是否相同，静默输出
+    diff -q "$file1" "$file2" >/dev/null 2>&1
+}
+
 # 检查冲突文件并列出所有文件
 check_conflicts() {
     local has_conflicts=0
@@ -146,19 +164,19 @@ check_conflicts() {
     # 显示文件树
     print_file_tree
     
-    # 检查是否有冲突
+    # 检查是否有真正的冲突（文件存在且内容不同）
     while IFS= read -r file; do
         local rel_path="${file#$SOURCE_DIR/}"
         local target_file="$CLAUDE_DIR/$rel_path"
         
-        if [ -f "$target_file" ]; then
+        if [ -f "$target_file" ] && ! files_are_identical "$file" "$target_file"; then
             has_conflicts=1
             break
         fi
     done < <(collect_files)
     
     if [ "$has_conflicts" -eq 1 ]; then
-        echo -e "${YELLOW}注意：标记为 ${RED}红色${YELLOW} 的文件将被覆盖${NC}"
+        echo -e "${YELLOW}注意：标记为 ${RED}红色${YELLOW} 的文件将被更新${NC}"
         echo
         return 1
     else
@@ -174,7 +192,7 @@ confirm_operation() {
     local has_conflicts=$1
     
     if [ "$has_conflicts" -eq 1 ]; then
-        echo -e "${YELLOW}警告：存在文件冲突，继续操作将覆盖目标文件。${NC}"
+        echo -e "${YELLOW}警告：存在文件差异，继续操作将更新目标文件。${NC}"
     else
         echo -e "${GREEN}未发现文件冲突。${NC}"
     fi
@@ -233,6 +251,24 @@ main() {
     # 检查是否有文件需要复制
     if [ "$(collect_files | wc -l)" -eq 0 ]; then
         echo -e "${YELLOW}未找到需要复制的文件${NC}"
+        exit 0
+    fi
+    
+    # 检查是否所有文件都已存在且相同
+    local has_new_or_different=0
+    while IFS= read -r file; do
+        local rel_path="${file#$SOURCE_DIR/}"
+        local target_file="$CLAUDE_DIR/$rel_path"
+        
+        if [ ! -f "$target_file" ] || ! files_are_identical "$file" "$target_file"; then
+            has_new_or_different=1
+            break
+        fi
+    done < <(collect_files)
+    
+    # 如果所有文件都相同，直接退出
+    if [ "$has_new_or_different" -eq 0 ]; then
+        echo -e "${GREEN}所有文件都已存在且相同，无需复制。${NC}"
         exit 0
     fi
     
